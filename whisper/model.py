@@ -105,7 +105,7 @@ class MultiHeadAttention(nn.Module):
         return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2), qk.detach()
 
 
-class ResidualAttentionBlock_for_encoder(nn.Module):
+class ResidualAttentionBlock(nn.Module):
     def __init__(self, n_state: int, n_head: int, cross_attention: bool = False):
         super().__init__()
 
@@ -133,7 +133,7 @@ class ResidualAttentionBlock_for_encoder(nn.Module):
         return x
 
 
-class ResidualAttentionBlock(nn.Module):
+class ResidualAttentionBlockForDecoder(nn.Module):
     def __init__(self, n_state: int, n_head: int, cross_attention: bool = False):
         super().__init__()
 
@@ -188,8 +188,8 @@ class AudioEncoder(nn.Module):
         self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
         self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
 
-        self.blocks: Iterable[ResidualAttentionBlock_for_encoder] = nn.ModuleList(
-            [ResidualAttentionBlock_for_encoder(n_state, n_head) for _ in range(n_layer)]
+        self.blocks: Iterable[ResidualAttentionBlock] = nn.ModuleList(
+            [ResidualAttentionBlock(n_state, n_head) for _ in range(n_layer)]
         )
         self.ln_post = LayerNorm(n_state)
 
@@ -219,8 +219,8 @@ class TextDecoder(nn.Module):
         self.token_embedding = nn.Embedding(n_vocab, n_state)
         self.positional_embedding = nn.Parameter(torch.empty(n_ctx, n_state))
 
-        self.blocks: Iterable[ResidualAttentionBlock] = nn.ModuleList(
-            [ResidualAttentionBlock(n_state, n_head, cross_attention=True) for _ in range(n_layer)]
+        self.blocks: Iterable[ResidualAttentionBlockForDecoder] = nn.ModuleList(
+            [ResidualAttentionBlockForDecoder(n_state, n_head, cross_attention=True) for _ in range(n_layer)]
         )
         self.ln = LayerNorm(n_state)
 

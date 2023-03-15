@@ -216,7 +216,9 @@ def transcribe(
                     seek += segment.shape[-1]  # fast-forward to the next segment boundary
                     continue
 
+            # tokens中的所有时间戳和非时间戳的token分开，并将时间戳的token标记为1，非时间戳的token标记为0
             timestamp_tokens: torch.Tensor = tokens.ge(tokenizer.timestamp_begin)
+            # 相邻时间戳在 tokens 中的索引位置 -> 分割点
             consecutive = torch.where(timestamp_tokens[:-1] & timestamp_tokens[1:])[0].add_(1)
             if len(consecutive) > 0:  # if the output contains two consecutive timestamp tokens
                 last_slice = 0
@@ -231,7 +233,7 @@ def transcribe(
                     add_segment(
                         start=timestamp_offset + start_timestamp_position * time_precision,
                         end=timestamp_offset + end_timestamp_position * time_precision,
-                        text_tokens=sliced_tokens[1:-1],
+                        text_tokens=sliced_tokens[1:-1],  # 最终token中不包括时间戳token
                         result=result,
                     )
                     last_slice = current_slice
@@ -242,6 +244,7 @@ def transcribe(
                 all_tokens.extend(tokens[: last_slice + 1].tolist())
             else:
                 duration = segment_duration
+                # 提取所有时间戳 token 的值
                 timestamps = tokens[timestamp_tokens.nonzero().flatten()]
                 if len(timestamps) > 0 and timestamps[-1].item() != tokenizer.timestamp_begin:
                     # no consecutive timestamps but it has a timestamp; use the last one.

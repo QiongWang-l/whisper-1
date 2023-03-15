@@ -10,10 +10,10 @@ import torch.nn.functional as F
 from .utils import exact_div
 
 # hard-coded audio hyperparameters
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 16000  # 语音信号的采样率
 N_FFT = 400
 N_MELS = 80
-HOP_LENGTH = 160
+HOP_LENGTH = 160  # 语音信号每帧的采样点数
 CHUNK_LENGTH = 30
 N_SAMPLES = CHUNK_LENGTH * SAMPLE_RATE  # 480000: number of samples in a chunk
 N_FRAMES = exact_div(N_SAMPLES, HOP_LENGTH)  # 3000: number of frames in a mel spectrogram input

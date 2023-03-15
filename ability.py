@@ -84,10 +84,10 @@ class Speech2Text(BaseModel):
         # load audio and pad/trim it to fit 30 seconds
         with torch.no_grad():
             audio = whisper.load_audio(audio_path)
-            audio = whisper.pad_or_trim(audio)
+            audio = whisper.pad_or_trim(audio)   # {ndarry:(480000,)}
 
             # make log-Mel spectrogram and move to the same device as the model
-            mel = whisper.log_mel_spectrogram(audio).to(self.device)
+            mel = whisper.log_mel_spectrogram(audio).to(self.device)  # (80,3000)
 
             # if single audio
             if mel.ndim == 2:

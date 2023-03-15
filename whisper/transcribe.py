@@ -219,6 +219,7 @@ def process(mel, tokenizer, input_stride, time_precision, num_frames, dtype, dec
     all_decode_time = 0
     with tqdm.tqdm(total=num_frames, unit='frames', disable=verbose is not False) as pbar:
         while seek < num_frames:
+            # print('@@@@@@@@@@@@@@@@@@@@@@@@@ seek{} \n'.format(seek))
             # 当前处理片段的偏置
             timestamp_offset = float(seek * HOP_LENGTH / SAMPLE_RATE)
             segment = pad_or_trim(mel[:, seek:], N_FRAMES).to(model.device).to(dtype)
@@ -228,6 +229,7 @@ def process(mel, tokenizer, input_stride, time_precision, num_frames, dtype, dec
 
             decode_options["prompt"] = all_tokens[prompt_reset_since:]
             result: DecodingResult = decode_with_fallback(segment, decode_options)
+            # print('!!!!!!!!!!!!!!!!!!!!!!!!!result:\n {}\n'.format(result))
 
             ed_time = time.time()
             all_decode_time += (ed_time - st_time)

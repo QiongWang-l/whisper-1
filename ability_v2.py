@@ -68,9 +68,6 @@ def save_to_json(audio_path: str, result: dict):
     audio_name = os.path.basename(audio_path)
     json_name = audio_name.split('.')[0] + '.json'
     json_path = os.path.join(parent_dir, json_name)
-    if not os.path.exists(json_path):
-        os.makedirs(json_path)
-        print('Create {} \n'.format(json_path))
 
     json.dump(result, open(json_path, mode='w', encoding='utf-8'), ensure_ascii=False)
 
