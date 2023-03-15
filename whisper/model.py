@@ -1,3 +1,7 @@
+"""
+### decoding_change_kv_cache
+"""
+
 from dataclasses import dataclass
 from typing import Dict
 from typing import Iterable, Optional
@@ -8,7 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch import nn
 
-from .transcribe import transcribe as transcribe_function
+from .transcribe import new_transcrebe as transcribe_function
 from .decoding import detect_language as detect_language_function, decode as decode_function
 
 
@@ -101,7 +105,7 @@ class MultiHeadAttention(nn.Module):
         return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2), qk.detach()
 
 
-class ResidualAttentionBlock(nn.Module):
+class ResidualAttentionBlock_for_encoder(nn.Module):
     def __init__(self, n_state: int, n_head: int, cross_attention: bool = False):
         super().__init__()
 
@@ -129,6 +133,54 @@ class ResidualAttentionBlock(nn.Module):
         return x
 
 
+class ResidualAttentionBlock(nn.Module):
+    def __init__(self, n_state: int, n_head: int, cross_attention: bool = False):
+        super().__init__()
+
+        self.attn = MultiHeadAttention(n_state, n_head)
+        self.attn_ln = LayerNorm(n_state)
+
+        self.cross_attn = MultiHeadAttention(n_state, n_head) if cross_attention else None
+        self.cross_attn_ln = LayerNorm(n_state) if cross_attention else None
+
+        n_mlp = n_state * 4
+        self.mlp = nn.Sequential(Linear(n_state, n_mlp), nn.GELU(), Linear(n_mlp, n_state))
+        self.mlp_ln = LayerNorm(n_state)
+
+    def forward(
+        self,
+        x: Tensor,
+        xa: Optional[Tensor] = None,
+        mask: Optional[Tensor] = None,
+        kv_cache: Optional[dict] = None,
+    ):
+        kv_cache = {**kv_cache} if kv_cache is not None else {}
+        hooks = []
+
+        def save_to_cache(module, _, output):
+            if module not in kv_cache or output.shape[1] > 1500:
+                kv_cache[module] = output  # save as-is, for the first token or cross attention
+            else:
+                kv_cache[module] = torch.cat([kv_cache[module], output], dim=1).detach()
+            return kv_cache[module]
+
+        hooks.append(self.attn.key.register_forward_hook(save_to_cache))
+        hooks.append(self.attn.value.register_forward_hook(save_to_cache))
+
+        x = x + self.attn(self.attn_ln(x), mask=mask, kv_cache=kv_cache)[0]
+        if self.cross_attn:
+            hooks.append(self.cross_attn.key.register_forward_hook(save_to_cache))
+            hooks.append(self.cross_attn.value.register_forward_hook(save_to_cache))
+            x = x + self.cross_attn(self.cross_attn_ln(x), xa, kv_cache=kv_cache)[0]
+        x = x + self.mlp(self.mlp_ln(x))
+
+        if hooks:
+            for hook in hooks:
+                hook.remove()
+
+        return x, kv_cache
+
+
 class AudioEncoder(nn.Module):
     def __init__(self, n_mels: int, n_ctx: int, n_state: int, n_head: int, n_layer: int):
         super().__init__()
@@ -136,8 +188,8 @@ class AudioEncoder(nn.Module):
         self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
         self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
 
-        self.blocks: Iterable[ResidualAttentionBlock] = nn.ModuleList(
-            [ResidualAttentionBlock(n_state, n_head) for _ in range(n_layer)]
+        self.blocks: Iterable[ResidualAttentionBlock_for_encoder] = nn.ModuleList(
+            [ResidualAttentionBlock_for_encoder(n_state, n_head) for _ in range(n_layer)]
         )
         self.ln_post = LayerNorm(n_state)
 
@@ -154,7 +206,7 @@ class AudioEncoder(nn.Module):
         x = (x + self.positional_embedding).to(x.dtype)
 
         for block in self.blocks:
-            x = block(x)
+            x= block(x)
 
         x = self.ln_post(x)
         return x
@@ -187,12 +239,12 @@ class TextDecoder(nn.Module):
         x = x.to(xa.dtype)
 
         for block in self.blocks:
-            x = block(x, xa, mask=self.mask, kv_cache=kv_cache)
+            x, kv_cache = block(x, xa, mask=self.mask, kv_cache=kv_cache)
 
         x = self.ln(x)
         logits = (x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)).float()
 
-        return logits
+        return logits, kv_cache
 
 
 class Whisper(nn.Module):
@@ -218,10 +270,16 @@ class Whisper(nn.Module):
         return self.encoder(mel)
 
     def logits(self, tokens: torch.Tensor, audio_features: torch.Tensor):
-        return self.decoder(tokens, audio_features)
+        # kv_cache = self.new_kv_cache(tokens.shape[0], tokens.shape[-1])
+        # output, _ = self.decoder(tokens, audio_features, kv_cache=kv_cache)
+        output, _ = self.decoder(tokens, audio_features)
+        return output
 
     def forward(self, mel: torch.Tensor, tokens: torch.Tensor) -> Dict[str, torch.Tensor]:
-        return self.decoder(tokens, self.encoder(mel))
+        # kv_cache = self.new_kv_cache(tokens.shape[0], tokens.shape[-1])
+        # output, _ = self.decoder(tokens, self.encoder(mel), kv_cache=kv_cache)
+        output, _ = self.decoder(tokens, self.encoder(mel))
+        return output
 
     @property
     def device(self):
@@ -230,6 +288,22 @@ class Whisper(nn.Module):
     @property
     def is_multilingual(self):
         return self.dims.n_vocab == 51865
+
+    def new_kv_cache(self, n_group: int, length: int):
+        # if self.type == "tiny.en" or self.type == "tiny":
+        #     size = [8, n_group, length, 384]
+        # elif self.type == "base.en" or self.type == "base":
+        #     size = [12, n_group, length, 512]
+        # elif self.type == "small.en" or self.type == "small":
+        #     size = [24, n_group, length, 768]
+        # elif self.type == "medium.en" or self.type == "medium":
+        #     size = [48, n_group, length, 1024]
+        # elif self.type == "large":
+        #     size = [64, n_group, length, 1280]
+        # else:
+        #     raise ValueError(f"Unsupported model type: {self.type}")
+        size = [48, n_group, length, 1024]
+        return np.zeros(size, dtype=np.float32)
 
     def install_kv_cache_hooks(self, cache: Optional[dict] = None):
         """

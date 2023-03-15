@@ -1,3 +1,8 @@
+"""
+### decoding_change_kv_cache_inner_decoder
+"""
+
+
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Iterable, Optional, Sequence, Union, TYPE_CHECKING
 
@@ -12,7 +17,7 @@ from .tokenizer import Tokenizer, get_tokenizer
 from .utils import compression_ratio
 
 if TYPE_CHECKING:
-    from .model import Whisper
+    from .model_original import Whisper
 
 
 @torch.no_grad()
@@ -81,19 +86,19 @@ class DecodingOptions:
     patience: Optional[float] = None  # patience in beam search (https://arxiv.org/abs/2204.05424)
 
     # options for ranking generations (either beams or best-of-N samples)
-    length_penalty: Optional[float] = None   # "alpha" in Google NMT, None defaults to length norm
+    length_penalty: Optional[float] = None  # "alpha" in Google NMT, None defaults to length norm
 
     # prompt, prefix, and token suppression
-    prompt: Optional[Union[str, List[int]]] = None   # text or tokens for the previous context
-    prefix: Optional[Union[str, List[int]]] = None   # text or tokens to prefix the current context
-    suppress_blank: bool = True                      # this will suppress blank outputs
+    prompt: Optional[Union[str, List[int]]] = None  # text or tokens for the previous context
+    prefix: Optional[Union[str, List[int]]] = None  # text or tokens to prefix the current context
+    suppress_blank: bool = True  # this will suppress blank outputs
 
     # list of tokens ids (or comma-separated token ids) to suppress
     # "-1" will suppress a set of symbols as defined in `tokenizer.non_speech_tokens()`
     suppress_tokens: Optional[Union[str, Iterable[int]]] = "-1"
 
     # timestamp sampling options
-    without_timestamps: bool = False              # use <|notimestamps|> to sample text tokens only
+    without_timestamps: bool = False  # use <|notimestamps|> to sample text tokens only
     max_initial_timestamp: Optional[float] = 1.0  # the initial timestamp cannot be later than this
 
     # implementation details
@@ -135,14 +140,16 @@ class PyTorchInference(Inference):
         self.hooks = []
 
     def logits(self, tokens: Tensor, audio_features: Tensor) -> Tensor:
-        if not self.kv_cache:
-            self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
+        # n_group = tokens.shape[0]
+        # if not self.kv_cache:
+        #     self.kv_cache = self.model.new_kv_cache(n_group, self.initial_token_length)
 
         if tokens.shape[-1] > self.initial_token_length:
             # only need to use the last token except in the first forward pass
             tokens = tokens[:, -1:]
 
-        return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
+        output, self.kv_cache = self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
+        return output
 
     def cleanup_caching(self):
         for hook in self.hooks:
@@ -222,7 +229,7 @@ class TokenDecoder:
         raise NotImplementedError
 
     def finalize(
-        self, tokens: Tensor, sum_logprobs: Tensor
+            self, tokens: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Sequence[Sequence[Tensor]], List[List[float]]]:
         """Finalize search and return the final candidate sequences
 
@@ -399,7 +406,7 @@ class SuppressTokens(LogitFilter):
 
 class ApplyTimestampRules(LogitFilter):
     def __init__(
-        self, tokenizer: Tokenizer, sample_begin: int, max_initial_timestamp_index: Optional[int]
+            self, tokenizer: Tokenizer, sample_begin: int, max_initial_timestamp_index: Optional[int]
     ):
         self.tokenizer = tokenizer
         self.sample_begin = sample_begin
@@ -412,21 +419,21 @@ class ApplyTimestampRules(LogitFilter):
 
         # timestamps have to appear in pairs, except directly before EOT; mask logits accordingly
         for k in range(tokens.shape[0]):
-            sampled_tokens = tokens[k, self.sample_begin :]
+            sampled_tokens = tokens[k, self.sample_begin:]
             seq = [t for t in sampled_tokens.tolist()]
             last_was_timestamp = len(seq) >= 1 and seq[-1] >= self.tokenizer.timestamp_begin
             penultimate_was_timestamp = len(seq) < 2 or seq[-2] >= self.tokenizer.timestamp_begin
 
             if last_was_timestamp:
                 if penultimate_was_timestamp:  # has to be non-timestamp
-                    logits[k, self.tokenizer.timestamp_begin :] = -np.inf
+                    logits[k, self.tokenizer.timestamp_begin:] = -np.inf
                 else:  # cannot be normal text tokens
                     logits[k, : self.tokenizer.eot] = -np.inf
 
             timestamps = sampled_tokens[sampled_tokens.ge(self.tokenizer.timestamp_begin)]
             if timestamps.numel() > 0:
                 # timestamps shouldn't decrease; forbid timestamp tokens smaller than the last
-                logits[k, self.tokenizer.timestamp_begin : timestamps[-1]] = -np.inf
+                logits[k, self.tokenizer.timestamp_begin: timestamps[-1]] = -np.inf
 
         if tokens.shape[1] == self.sample_begin:
             # suppress generating non-timestamp tokens at the beginning
@@ -435,12 +442,12 @@ class ApplyTimestampRules(LogitFilter):
             # apply the `max_initial_timestamp` option
             if self.max_initial_timestamp_index is not None:
                 last_allowed = self.tokenizer.timestamp_begin + self.max_initial_timestamp_index
-                logits[:, last_allowed + 1 :] = -np.inf
+                logits[:, last_allowed + 1:] = -np.inf
 
         # if sum of probability over timestamps is above any other token, sample timestamp
         logprobs = F.log_softmax(logits.float(), dim=-1)
         for k in range(tokens.shape[0]):
-            timestamp_logprob = logprobs[k, self.tokenizer.timestamp_begin :].logsumexp(dim=-1)
+            timestamp_logprob = logprobs[k, self.tokenizer.timestamp_begin:].logsumexp(dim=-1)
             max_text_token_logprob = logprobs[k, : self.tokenizer.timestamp_begin].max()
             if timestamp_logprob > max_text_token_logprob:
                 logits[k, : self.tokenizer.timestamp_begin] = -np.inf
@@ -516,8 +523,10 @@ class DecodingTask:
 
     def _get_initial_tokens(self) -> Tuple[int]:
         tokens = list(self.sot_sequence)
+        prefix = self.options.prefix
+        prompt = self.options.prompt
 
-        if prefix := self.options.prefix:
+        if prefix:
             prefix_tokens = (
                 self.tokenizer.encode(" " + prefix.strip()) if isinstance(prefix, str) else prefix
             )
@@ -526,11 +535,11 @@ class DecodingTask:
                 prefix_tokens = prefix_tokens[-max_prefix_len:]
             tokens = tokens + prefix_tokens
 
-        if prompt := self.options.prompt:
+        if prompt:
             prompt_tokens = (
                 self.tokenizer.encode(" " + prompt.strip()) if isinstance(prompt, str) else prompt
             )
-            tokens = [self.tokenizer.sot_prev] + prompt_tokens[-(self.n_ctx // 2 - 1) :] + tokens
+            tokens = [self.tokenizer.sot_prev] + prompt_tokens[-(self.n_ctx // 2 - 1):] + tokens
 
         return tuple(tokens)
 
@@ -650,7 +659,7 @@ class DecodingTask:
         # get the final candidates for each group, and slice between the first sampled token and EOT
         tokens, sum_logprobs = self.decoder.finalize(tokens, sum_logprobs)
         tokens: List[List[Tensor]] = [
-            [t[self.sample_begin : (t == tokenizer.eot).nonzero()[0, 0]] for t in s] for s in tokens
+            [t[self.sample_begin: (t == tokenizer.eot).nonzero()[0, 0]] for t in s] for s in tokens
         ]
 
         # select the top-ranked sample in each group
@@ -681,7 +690,8 @@ class DecodingTask:
 
 
 @torch.no_grad()
-def decode(model: "Whisper", mel: Tensor, options: DecodingOptions = DecodingOptions()) -> Union[DecodingResult, List[DecodingResult]]:
+def decode(model: "Whisper", mel: Tensor, options: DecodingOptions = DecodingOptions()) -> Union[
+    DecodingResult, List[DecodingResult]]:
     """
     Performs decoding of 30-second audio segment(s), provided as Mel spectrogram(s).
 
@@ -701,7 +711,8 @@ def decode(model: "Whisper", mel: Tensor, options: DecodingOptions = DecodingOpt
     result: Union[DecodingResult, List[DecodingResult]]
         The result(s) of decoding contained in `DecodingResult` dataclass instance(s)
     """
-    if single := mel.ndim == 2:
+    single = mel.ndim == 2
+    if single:
         mel = mel.unsqueeze(0)
 
     result = DecodingTask(model, options).run(mel)
