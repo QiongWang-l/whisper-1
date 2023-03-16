@@ -200,8 +200,7 @@ def transcribe(
             result: DecodingResult = decode_with_fallback(segment)
 
             ed_time = time.time()
-            cost_time = ed_time - st_time
-            all_decode_time += cost_time
+            all_decode_time += (ed_time - st_time)
 
             tokens = torch.tensor(result.tokens)
 

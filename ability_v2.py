@@ -19,7 +19,9 @@ from torch import Tensor
 
 import whisper
 import torch
+from whisper import transcribe_
 
+from whisper import DecodingTask
 from whisper.utils import compression_ratio
 
 
@@ -79,23 +81,23 @@ class Speech2Text(BaseModel):
         super().__init__(model_name)
         self.__name__ = "speech2text"
         self.__version__ = 1
-        self.infer_batch_size = 1
+        # self.infer_batch_size = 1
         # self.ability = Ability(config, self.__name__)
         self.extra_info = {}
 
         self.model_name = model_name
         self.language = language
         self.whisper_model = whisper.load_model(self.model_name).to(self.device)
-        print('load whisper')
+        self.decoding_options = whisper.DecodingOptions()
+        print('load whisper model: {} \n'.format(self.model_name))
 
     def __call__(self, audio_path: str):
         # audio_path= "example-1.wav"
 
-        # 预处理
-        # load audio and pad/trim it to fit 30 seconds
         with torch.no_grad():
-            result = self.whisper_model.transcribe(audio_path)
+            result = transcribe_.new_transcrebe(self.whisper_model, self.device, audio_path)
 
+        # 保存为json
         save_to_json(audio_path, result)
 
         return result
@@ -103,5 +105,10 @@ class Speech2Text(BaseModel):
 
 if __name__ == "__main__":
     model = Speech2Text('medium')
-    print(model('./whisper/test1.mp4'))
+    print(model('./whisper/test4.mp4'))
     # print(model('/home/mgtv/test_whisper/test1.mp4'))
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # model = whisper.load_model('medium').to(device)
+    # res = model.transcribe('./whisper/test4.mp4')
+    #
+    # print(res)

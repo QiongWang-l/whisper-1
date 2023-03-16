@@ -201,6 +201,5 @@ class Speech2Text(BaseModel):
 
 if __name__ == "__main__":
     model = Speech2Text('medium')
-    print(model.__name__)
-    print(model('./whisper/test1.mp4'))
+    print(model('./whisper/test4.mp4'))
     # print(model('/home/mgtv/test_whisper/test1.mp4'))
